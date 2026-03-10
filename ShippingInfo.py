@@ -66,25 +66,18 @@ def process_files(db_path, shipment_path, date_inputs, output_dir, progress_call
 
     # read database sheet - only read rows with data
     try:
-        # First use openpyxl to read the actual used range
-        from openpyxl import load_workbook as load_wb_temp
-        wb_temp = load_wb_temp(db_path, read_only=True, data_only=True)
-        ws_temp = wb_temp["2025 Orders"]
+        log("Opening database file...")
 
-        # Find actual last row (search backwards for first non-empty row)
-        actual_max_row = ws_temp.max_row
-        for row_idx in range(ws_temp.max_row, 0, -1):
-            row_values = [ws_temp.cell(row_idx, col).value for col in range(1, min(22, ws_temp.max_column + 1))]
-            if any(v is not None and str(v).strip() != "" for v in row_values):
-                actual_max_row = row_idx
-                break
-        wb_temp.close()
+        # 直接读取前10000行（通常实际数据不会超过这个数）
+        # 这样可以避免扫描100万行的问题
+        max_rows_to_read = 10000  # 可以根据实际情况调整这个数字
 
-        log(f"Excel shows {ws_temp.max_row:,} rows, actual data rows: {actual_max_row:,}")
-
-        # Only read rows with actual data (plus header)
+        log(f"Reading first {max_rows_to_read:,} rows from '2025 Orders' sheet...")
         df_db = pd.read_excel(db_path, sheet_name="2025 Orders", engine="openpyxl",
-                              dtype=str, nrows=actual_max_row - 1)  # -1 to exclude header
+                              dtype=str, nrows=max_rows_to_read)
+
+        log(f"✓ Initial read completed, got {len(df_db):,} rows")
+
     except Exception as e:
         raise RuntimeError(f"Failed to read database file: {e}")
 
@@ -227,8 +220,9 @@ def process_files(db_path, shipment_path, date_inputs, output_dir, progress_call
     COL_F = 5
     COL_G = 6
     COL_H = 7
-    COL_N = 14  # 原来的N列（索引13），现在是O列（索引14）
-    COL_O = 15  # 原来的O列（索引14），现在是P列（索引15）
+    # I列后面插入了新列，所以原J列之后的都+1
+    COL_N = 14  # O列（索引14）→ 映射到输出F列（用于文件名分组）
+    COL_O = 15  # P列（索引15）→ 映射到输出M列
 
     log(f"Preparing {len(matched_df):,} rows of data...")
 
@@ -426,6 +420,9 @@ def on_run():
         messagebox.showerror("Date Error", "Please enter at least one date (comma separated if multiple).")
         return
 
+    # Clear log window
+    log_text.delete(1.0, tk.END)
+
     # Disable button and update status
     btn_run.config(state="disabled", text="Processing...")
     progress_label.config(text="Starting process...", fg="blue")
@@ -436,7 +433,7 @@ def on_run():
         try:
             def update_progress(msg):
                 # Use after to update GUI in main thread
-                root.after(0, lambda m=msg: progress_label.config(text=m))
+                root.after(0, lambda m=msg: update_log_and_progress(m))
 
             result = process_files(db_file, ship_file, date_list, out_dir, update_progress)
             # Show results in main thread after completion
@@ -449,9 +446,30 @@ def on_run():
     thread.start()
 
 
+def update_log_and_progress(msg):
+    """Update both progress label and log window"""
+    # Update progress label
+    progress_label.config(text=msg)
+
+    # Add to log window with timestamp
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    log_text.insert(tk.END, f"[{timestamp}] {msg}\n")
+    log_text.see(tk.END)  # Auto-scroll to bottom
+    root.update()
+
+
 def show_success(result):
     btn_run.config(state="normal", text="Run Process")
-    progress_label.config(text="", fg="blue")
+    progress_label.config(text="✓ Complete!", fg="green")
+
+    # Add completion message to log
+    log_text.insert(tk.END, f"\n{'=' * 80}\n")
+    log_text.insert(tk.END, f"✓ PROCESSING COMPLETE!\n")
+    log_text.insert(tk.END, f"Exported {len(result['exported_files'])} files.\n")
+    if result["no_match_inputs"]:
+        log_text.insert(tk.END, f"No matches for dates: {', '.join(result['no_match_inputs'])}\n")
+    log_text.insert(tk.END, f"{'=' * 80}\n")
+    log_text.see(tk.END)
 
     msg = f"✓ Processing complete!\n\nExported {len(result['exported_files'])} files."
     if result["no_match_inputs"]:
@@ -461,14 +479,21 @@ def show_success(result):
 
 def show_error(error_msg):
     btn_run.config(state="normal", text="Run Process")
-    progress_label.config(text="", fg="blue")
+    progress_label.config(text="✗ Error occurred", fg="red")
+
+    # Add error to log
+    log_text.insert(tk.END, f"\n{'=' * 80}\n")
+    log_text.insert(tk.END, f"✗ ERROR: {error_msg}\n")
+    log_text.insert(tk.END, f"{'=' * 80}\n")
+    log_text.see(tk.END)
+
     messagebox.showerror("Error", error_msg)
 
 
 # Build GUI
 root = tk.Tk()
 root.title("Thermo Shipment Automation Tool")
-root.geometry("950x400")
+root.geometry("950x600")  # 增加高度以容纳日志窗口
 
 # Set style
 style = ttk.Style()
@@ -524,11 +549,32 @@ progress_label.grid(row=5, column=1, pady=6)
 # Run button
 btn_run = tk.Button(root, text="Run Process", bg="#4CAF50", fg="white", width=20, height=2, font=("Arial", 10, "bold"),
                     command=on_run)
-btn_run.grid(row=6, column=1, pady=18)
+btn_run.grid(row=6, column=1, pady=10)
+
+# Log window section
+tk.Label(root, text="Process Log:", font=("Arial", 10, "bold")).grid(row=7, column=0, columnspan=3, sticky="w", padx=6,
+                                                                     pady=(10, 0))
+
+# Create frame for log text widget with scrollbar
+log_frame = tk.Frame(root)
+log_frame.grid(row=8, column=0, columnspan=3, padx=6, pady=6, sticky="nsew")
+
+# Configure grid weights for resizing
+root.grid_rowconfigure(8, weight=1)
+root.grid_columnconfigure(1, weight=1)
+
+# Scrollbar
+log_scrollbar = tk.Scrollbar(log_frame)
+log_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+# Text widget for logs
+log_text = tk.Text(log_frame, height=12, width=110, yscrollcommand=log_scrollbar.set,
+                   font=("Consolas", 9), bg="#f5f5f5", fg="#333333")
+log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+log_scrollbar.config(command=log_text.yview)
 
 # Instructions
-info_text = "Note: Processing 1M+ rows may take 5-10 minutes, please be patient\n1. Select database file → 2. Select shipment file → 3. Enter date(s) → 4. Select output folder → 5. Run process"
-tk.Label(root, text=info_text, justify="left", fg="gray", font=("Arial", 8)).grid(row=7, column=0, columnspan=3,
-                                                                                  pady=10)
+info_text = "Note: Processing may take several minutes depending on data size. Check the log window for detailed progress."
+tk.Label(root, text=info_text, justify="left", fg="gray", font=("Arial", 8)).grid(row=9, column=0, columnspan=3, pady=6)
 
 root.mainloop()
