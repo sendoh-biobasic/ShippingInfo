@@ -72,8 +72,8 @@ def process_files(db_path, shipment_path, date_inputs, output_dir, progress_call
         # 这样可以避免扫描100万行的问题
         max_rows_to_read = 10000  # 可以根据实际情况调整这个数字
 
-        log(f"Reading first {max_rows_to_read:,} rows from '2025 Orders' sheet...")
-        df_db = pd.read_excel(db_path, sheet_name="2025 Orders", engine="openpyxl",
+        log(f"Reading first {max_rows_to_read:,} rows from '2026 Orders' sheet...")
+        df_db = pd.read_excel(db_path, sheet_name="2026 Orders", engine="openpyxl",
                               dtype=str, nrows=max_rows_to_read)
 
         log(f"✓ Initial read completed, got {len(df_db):,} rows")
@@ -90,7 +90,7 @@ def process_files(db_path, shipment_path, date_inputs, output_dir, progress_call
 
     if df_db.shape[1] < 16:
         raise RuntimeError(
-            f"Thermo Database '2025 Orders' must have at least 16 columns, currently has {df_db.shape[1]} columns.")
+            f"Thermo Database '2026 Orders' must have at least 16 columns, currently has {df_db.shape[1]} columns.")
 
     # determine M column label (prefer header 'EST. DELIVERY DATE')
     date_col_label = None
